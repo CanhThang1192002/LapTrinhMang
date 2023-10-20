@@ -1,0 +1,19 @@
+PROGRAM TinhTong;
+VAR
+    so1, so2, tong: INTEGER;
+BEGIN
+    WRITE('Nhap so thu nhat: ');
+    READ(so1);
+ 
+    WRITE('Nhap so thu hai: ');
+    READ(so2);
+ 
+    tong := so1 + so2;
+ 
+    WRITE('Tong cua hai so la: ');
+    WRITE(tong);
+ 
+    WRITELN; (* Xuống dòng *)
+ 
+    (* Kết thúc chương trình *)
+END.

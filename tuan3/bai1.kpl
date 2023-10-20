@@ -1,0 +1,39 @@
+PROGRAM KiemTraMaTranTamGiacTren;
+ 
+VAR
+    n: INTEGER;
+    i, j: INTEGER;
+    matran: ARRAY [1..10, 1..10] OF INTEGER;
+    laTamGiacTren: INTEGER;
+ 
+BEGIN
+    WRITE('Nhap kich thuoc ma tran (n): ');
+    READ(n);
+ 
+    (* Nhập các phần tử cho ma trận *)
+    FOR i FROM 1 TO n DO
+        FOR j FROM 1 TO n DO
+            WRITE('Nhap phan tu tai vi tri [', i, '][', j, ']: ');
+            READ(matran[i][j]);
+        END FOR;
+    END FOR;
+ 
+    (* Kiểm tra xem ma trận có phải là tam giác trên hay không *)
+    laTamGiacTren := 1; (* Giả định ban đầu là tam giác trên *)
+    
+    FOR i FROM 1 TO n DO
+        FOR j FROM 1 TO i - 1 DO
+            IF matran[i][j] <> 0 THEN
+                laTamGiacTren := 0; (* Nếu có một phần tử khác không dưới đường chéo, không phải tam giác trên *)
+            END IF;
+        END FOR;
+    END FOR;
+ 
+    IF laTamGiacTren = 1 THEN
+        WRITE('Ma tran la tam giac tren.')
+    ELSE
+        WRITE('Ma tran khong phai la tam giac tren.');
+    END IF;
+ 
+    (* Kết thúc chương trình *)
+END.
