@@ -1,43 +1,189 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "linkedList.h"
 #include <ctype.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <openssl/sha.h>
 
-#define MAX_ATTEMPTS 3
-#define MAX_ACCOUNTS 3
+#define MAX_SIZE 1024
 
-typedef struct Account
-{
-    char username[100];
-    char password[100];
-    int is_active;
-    int attempts; // Number of failed login attempts
-} Account;
+void readFile(list *l); // Read data from file saved to list
 
-// Function to load account data from a file
-int loadAccounts(Account accounts[])
+void writeFile(list *l); // Write data from list to file
+
+int create_socket(); // create socket
+
+struct sockaddr_in create_server_addr(int port); // create server address
+
+void bind_socket(int sockfd, struct sockaddr_in server_addr); // bind socket to server address and port
+
+void sha256(const char *input, char output[65]); // Function to hash a string using SHA-256
+
+int isAlphanumeric(const char *str); // Function to check if a string contains only letters and digits
+
+void changePassword(char buffer[], node *p, char response[]); // Function to change password
+
+void logout(node *p, int *login_status, char response[]); // Function to logout
+
+int main(int argc, char *argv[])
 {
-    FILE *file = fopen("account.txt", "r");
-    if (file == NULL)
+    if (argc != 2)
+    {
+        fprintf(stderr, "--> Usage: %s PortNumber\n", argv[0]);
+        exit(1);
+    }
+    list accounts;
+    initList(&accounts);
+    readFile(&accounts);
+
+    struct sockaddr_in server_addr, client_addr;
+    int port = atoi(argv[1]);
+    int server_socket = create_socket();
+    server_addr = create_server_addr(port);
+    bind_socket(server_socket, server_addr);
+
+    char buffer[MAX_SIZE];
+    socklen_t len = sizeof(client_addr);
+    int login_status = 0;
+    node *p = NULL;
+    while (1)
+    {
+        memset(buffer, '\0', sizeof(buffer));
+        recvfrom(server_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &len);
+        if (login_status != 0)
+        {
+            if (strcmp(buffer, "bye") == 0)
+            {
+                char response_bye[MAX_SIZE];
+                logout(p, &login_status, response_bye);
+                sendto(server_socket, response_bye, sizeof(response_bye), 0, (struct sockaddr *)&client_addr, len);
+            }
+            else
+            {
+                if (isAlphanumeric(buffer))
+                {
+                    char response[MAX_SIZE * 2];
+                    changePassword(buffer, p, response);
+                    writeFile(&accounts);
+                    sendto(server_socket, response, sizeof(response), 0, (struct sockaddr *)&client_addr, len);
+                }
+                else
+                {
+                    sendto(server_socket, "--> Error", MAX_SIZE, 0, (struct sockaddr *)&client_addr, len);
+                }
+            }
+        }
+        else
+        {
+            char username[MAX_SIZE];
+            char password[MAX_SIZE];
+            socklen_t len = sizeof(client_addr);
+            memcpy(username, buffer, MAX_SIZE);
+            // Check if the account exists and is active
+            p = searchAccount(&accounts, username);
+            if (p != NULL && p->data.is_active == 1)
+            {
+                sendto(server_socket, "--> Insert password: ", MAX_SIZE, 0, (struct sockaddr *)&client_addr, len);
+                memset(password, '\0', sizeof(password));
+                recvfrom(server_socket, password, sizeof(password), 0, (struct sockaddr *)&client_addr, &len);
+                // Check if the password is correct
+                if (strcmp(password, p->data.password) == 0)
+                {
+                    sendto(server_socket, "--> Ok", MAX_SIZE, 0, (struct sockaddr *)&client_addr, len);
+                    p->data.attempts = 0;
+                    login_status = 1;
+                }
+                else
+                {
+                    p->data.attempts++;
+                    if (p->data.attempts >= 3)
+                    {
+                        p->data.is_active = 0;
+                        writeFile(&accounts);
+                        sendto(server_socket, "--> Account is blocked", MAX_SIZE, 0, (struct sockaddr *)&client_addr, len);
+                    }
+                    else
+                    {
+                        sendto(server_socket, "--> not OK", MAX_SIZE, 0, (struct sockaddr *)&client_addr, len);
+                    }
+                }
+            }
+            else
+            {
+                sendto(server_socket, "--> account not ready", MAX_SIZE, 0, (struct sockaddr *)&client_addr, len);
+            }
+        }
+    }
+    close(server_socket);
+    return 0;
+}
+
+void readFile(list *l)
+{
+    FILE *f = fopen("account.txt", "r");
+    if (f == NULL)
     {
         perror("Unable to open account.txt");
         exit(1);
     }
-    int num_accounts = 0;
-    while (!feof(file))
+    while (!feof(f))
     {
-        fscanf(file, "%s %s %d", accounts[num_accounts].username, accounts[num_accounts].password, &accounts[num_accounts].is_active);
-        accounts[num_accounts].attempts = 0;
-        num_accounts++;
+        Account a;
+        fscanf(f, "%s %s %d", a.username, a.password, &a.is_active);
+        a.attempts = 0;
+        node *p = makeNode(a);
+        addAccount(l, p);
     }
-    fclose(file);
-    return num_accounts;
+    fclose(f);
 }
 
-// Function to hash a string using SHA-256
+void writeFile(list *l)
+{
+    FILE *f = fopen("account.txt", "w");
+    if (f == NULL)
+    {
+        perror("Unable to open account.txt");
+        exit(1);
+    }
+    node *p;
+    for (p = l->head; p != l->tail; p = p->next)
+    {
+        fprintf(f, "%s %s %d\n", p->data.username, p->data.password, p->data.is_active);
+    }
+    fprintf(f, "%s %s %d", p->data.username, p->data.password, p->data.is_active);
+    fclose(f);
+}
+
+int create_socket()
+{
+    int sockfd;
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+    return sockfd;
+}
+
+struct sockaddr_in create_server_addr(int port)
+{
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    // server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
+    return server_addr;
+}
+
+void bind_socket(int sockfd, struct sockaddr_in server_addr)
+{
+    if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
+    {
+        perror("Bind error");
+        exit(1);
+    }
+}
+
 void sha256(const char *input, char output[65])
 {
     unsigned char hash[SHA256_DIGEST_LENGTH];
@@ -45,7 +191,6 @@ void sha256(const char *input, char output[65])
     SHA256_Init(&sha256);
     SHA256_Update(&sha256, input, strlen(input));
     SHA256_Final(hash, &sha256);
-
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
     {
         sprintf(output + 2 * i, "%02x", hash[i]);
@@ -53,154 +198,53 @@ void sha256(const char *input, char output[65])
     output[64] = 0;
 }
 
-// Function to check if a string contains only letters and digits
 int isAlphanumeric(const char *str)
 {
     for (int i = 0; str[i]; i++)
     {
         if (!isalnum(str[i]))
         {
-            return 0; // Not alphanumeric
+            return 0;
         }
     }
-    return 1; // Alphanumeric
+    return 1;
 }
 
-int main(int argc, char *argv[])
+void changePassword(char buffer[], node *p, char response[])
 {
-    if (argc != 2)
+    char hashed_password[100];
+    sha256(buffer, hashed_password);
+    strcpy(p->data.password, buffer);
+    char alphaChars[MAX_SIZE], numericChars[MAX_SIZE];
+    int numAlphaChars = 0, numNumericChars = 0;
+    for (int i = 0; i < strlen(hashed_password); i++)
     {
-        fprintf(stderr, "Usage: %s PortNumber\n", argv[0]);
-        exit(1);
-    }
-    Account accounts[MAX_ACCOUNTS]; // account data
-    int num_accounts = 0;
-    // Load account data from account.txt
-    num_accounts = loadAccounts(accounts);
-
-    int port = atoi(argv[1]);
-
-    int server_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (server_socket == -1)
-    {
-        perror("Socket creation error");
-        exit(1);
-    }
-
-    struct sockaddr_in server_addr, client_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
-    {
-        perror("Bind error");
-        exit(1);
-    }
-
-    char buffer[256];
-    socklen_t len = sizeof(client_addr);
-    int login_status = 0, account_index = -1;
-    ;
-    while (1)
-    {
-        memset(buffer, '\0', sizeof(buffer));
-        recvfrom(server_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &len);
-        printf("Received: %s\n", buffer);
-        if (login_status != 0)
+        if (isalpha(hashed_password[i]))
         {
-            printf("da login\n");
-            if (strcmp(buffer, "bye") == 0)
-            {
-                char response[] = "Goodbye ";
-                strcat(response, accounts[account_index].username);
-                sendto(server_socket, response, sizeof(response), 0, (struct sockaddr *)&client_addr, len);
-                account_index = -1;
-                login_status = 0;
-            }
-            else if (strcmp(buffer, "change_password") == 0)
-            {
-                char hashed_password[100];
-                if (isAlphanumeric(buffer))
-                {
-                    // Mật khẩu hợp lệ, mã hóa bằng SHA-256
-                    sha256(buffer, hashed_password);
-                    strcpy(accounts[account_index].password, buffer);
-                    char alphaChars[256], numericChars[256];
-                    int numAlphaChars = 0, numNumericChars = 0;
-                    for (int i = 0; i < strlen(hashed_password); i++)
-                    {
-                        if (isalpha(hashed_password[i]))
-                        {
-                            alphaChars[numAlphaChars++] = hashed_password[i];
-                        }
-                        else if (isdigit(hashed_password[i]))
-                        {
-                            numericChars[numNumericChars++] = hashed_password[i];
-                        }
-                    }
-                    alphaChars[numAlphaChars] = '\0';
-                    numericChars[numNumericChars] = '\0';
-                    sendto(server_socket, alphaChars, sizeof(alphaChars), 0, (struct sockaddr *)&client_addr, len);
-                    sendto(server_socket, numericChars, sizeof(numericChars), 0, (struct sockaddr *)&client_addr, len);
-                }
-                else
-                {
-                    char response[] = "Error";
-                    sendto(server_socket, response, sizeof(response), 0, (struct sockaddr *)&client_addr, len);
-                }
-            }
+            alphaChars[numAlphaChars++] = hashed_password[i];
         }
-        else
+        else if (isdigit(hashed_password[i]))
         {
-            printf("login\n");
-            char username[100];
-            char password[100];
-            strcpy(username, buffer);
-            for (int i = 0; i < num_accounts; i++)
-            {
-                if (strcmp(username, accounts[i].username) == 0)
-                {
-                    account_index = i;
-                    break;
-                }
-            }
-            // Kiểm tra xem tài khoản có tồn tại và có hoạt động không
-            printf("account_index: %d\n", account_index);
-            if (account_index >= 0 && accounts[account_index].is_active == 1)
-            {
-                char response1[] = "Insert password: ";
-                sendto(server_socket, response1, sizeof(response1), 0, (struct sockaddr *)&client_addr, len);
-                memset(password, '\0', sizeof(password));
-                recvfrom(server_socket, password, sizeof(password), 0, (struct sockaddr *)&client_addr, &len);
-                // Kiểm tra mật khẩu
-                if (strcmp(password, accounts[account_index].password) == 0)
-                {
-                    char response[] = "OK";
-                    sendto(server_socket, response, sizeof(response), 0, (struct sockaddr *)&client_addr, len);
-                    accounts[account_index].attempts = 0;
-                    login_status = 1;
-                }
-                else
-                {
-                    char response[] = "not OK";
-                    sendto(server_socket, response, sizeof(response), 0, (struct sockaddr *)&client_addr, len);
-                    accounts[account_index].attempts++;
-                    if (accounts[account_index].attempts >= 3)
-                    {
-                        accounts[account_index].is_active = 0;
-                    }
-                }
-            }
-            else
-            {
-                char response[] = "account not ready";
-                sendto(server_socket, response, sizeof(response), 0, (struct sockaddr *)&client_addr, len);
-            }
+            numericChars[numNumericChars++] = hashed_password[i];
         }
     }
+    alphaChars[numAlphaChars] = '\0';
+    numericChars[numNumericChars] = '\0';
+    response[0] = '\0';
+    char response_alpha[] = "--> AlphaChars: ";
+    strcat(response_alpha, alphaChars);
+    strcat(response, response_alpha);
+    strcat(response, "\n");
+    char response_numeric[] = "--> NumericChars: ";
+    strcat(response, response_numeric);
+    strcat(response, numericChars);
+}
 
-    close(server_socket);
-    return 0;
+void logout(node *p, int *login_status, char response[])
+{
+    response[0] = '\0';
+    strcat(response, "--> Goodbye ");
+    strcat(response, p->data.username);
+    p = NULL;
+    *login_status = 0;
 }
